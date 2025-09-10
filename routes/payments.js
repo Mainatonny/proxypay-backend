@@ -20,7 +20,7 @@ const router = express.Router();
 
 router.use('/images', express.static(path.join(__dirname, 'images')));
 
-const STATIC_ALIPAY_QR = "/images/alipay.jpg";
+//const STATIC_ALIPAY_QR = "/images/alipay.jpg";
 
 router.get('/get-recharge-url/:orderId', authenticateToken, async (req, res) => {
     const { orderId } = req.params;
@@ -102,38 +102,35 @@ router.post('/create-order', authenticateToken, async (req, res) => {
         );
         const order = orderResult.rows[0];
 
-        // 2️⃣ Default fallback QR
-        let paymentQR = STATIC_ALIPAY_QR;
+        // 2️⃣ Fetch payment method name
+        const methodResult = await pool.query(
+            'SELECT name FROM payment_methods WHERE id = $1',
+            [payment_method]
+        );
+        const methodName = methodResult.rows[0]?.name || '';
 
-        // 3️⃣ If Alipay, simulate login + recharge flow
-        if (String(payment_method).toLowerCase().includes('alipay')) {
+        let paymentQR = '';
+
+        // 3️⃣ Only generate dynamic QR for Alipay
+        if (methodName.toLowerCase().includes('alipay')) {
             try {
                 const jar = new tough.CookieJar();
                 const client = wrapper(axios.create({ jar }));
 
-                // Simulate login
                 await client.post(
                     `${ALIPAY_BASE_URL}/login`,
-                    new URLSearchParams({
-                        username: AWAKEN_USERNAME,
-                        password: AWAKEN_PASSWORD
-                    }),
+                    new URLSearchParams({ username: AWAKEN_USERNAME, password: AWAKEN_PASSWORD }),
                     { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
                 );
 
-                // Fetch recharge page
-                const rechargePage = await client.get(
-                    `${ALIPAY_BASE_URL}/recharge?amount=${amount}&order_id=${order.id}`
-                );
-
-                // Extract recharge URL
+                // Recharge page URL
                 paymentQR = `${ALIPAY_BASE_URL}/pay/${order.id}?amount=${amount}`;
             } catch (err) {
-                console.error('⚠️ Failed to fetch dynamic recharge URL, falling back to static QR:', err.message);
+                console.error('Failed to fetch dynamic Alipay URL:', err.message);
+                return res.status(500).json({ error: 'Failed to generate Alipay recharge URL' });
             }
         }
 
-        // 4️⃣ Respond with order + QR/recharge URL
         res.status(201).json({
             message: 'Order created successfully',
             order,

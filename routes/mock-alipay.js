@@ -62,6 +62,8 @@ app.get('/pay/:id/success', (req, res) => {
   `);
 });
 
-app.listen(4000, () => {
-  console.log('🟢 Mock Awaken Alipay running at http://localhost:4000');
+const PORT = process.env.PORT || 4000;
+
+app.listen(PORT, () => {
+  console.log(`🟢 Mock Awaken Alipay running at http://localhost:${PORT}`);
 });
