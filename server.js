@@ -71,3 +71,27 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(` Server running on http://localhost:${PORT}`);
 });
+
+const mockAlipay = express.Router();
+
+mockAlipay.get('/recharge', (req, res) => {
+  const { amount, order_id } = req.query;
+  res.send(`
+    <html>
+      <head><title>Awaken Alipay Recharge</title></head>
+      <body>
+        <h2>Awaken Alipay Recharge</h2>
+        <p>Order ID: ${order_id}</p>
+        <p>Amount: ¥${amount}</p>
+        <p>Status: Awaiting payment...</p>
+        <a id="recharge-link" href="/pay/${order_id}"> Simulate Successful</a>
+      </body>
+    </html>
+  `);
+});
+
+mockAlipay.get('/pay/:id', (req, res) => {
+  res.send(`<h2> Payment success for order ${req.params.id}</h2>`);
+});
+
+app.use('/mock-alipay', mockAlipay);
