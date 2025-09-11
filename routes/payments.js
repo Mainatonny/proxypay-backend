@@ -9,9 +9,25 @@ require('dotenv').config();
 const router = express.Router();
 
 // Constants for the recharge website
-const RECHARGE_BASE_URL = 'https://m.1jianji.com';
+const RECHARGE_BASE_URL = 'https://www.ijianji.com';
 const RECHARGE_USERNAME = process.env.RECHARGE_USERNAME || '13231579635';
 const RECHARGE_PASSWORD = process.env.RECHARGE_PASSWORD || '579635';
+
+// Common headers (mimic Firefox + Bing referer)
+const COMMON_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:142.0) Gecko/20100101 Firefox/142.0',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.5',
+    'Accept-Encoding': 'gzip, deflate, br, zstd',
+    'Referer': 'https://www.bing.com/',
+    'Connection': 'keep-alive',
+    'Upgrade-Insecure-Requests': '1',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'cross-site',
+    'Priority': 'u=0, i',
+    'Content-Type': 'application/x-www-form-urlencoded'
+};
 
 // Create payment order
 router.post('/create-order', async (req, res) => {
@@ -45,13 +61,12 @@ router.post('/create-order', async (req, res) => {
                     username: RECHARGE_USERNAME, 
                     password: RECHARGE_PASSWORD 
                 }),
-                { 
-                    headers: { 
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-                    } 
-                }
+                { headers: COMMON_HEADERS }
             );
+
+            if (loginResponse.status !== 200) {
+                throw new Error(`Login failed with status ${loginResponse.status}`);
+            }
 
             // Step 2: Perform recharge and get payment URL
             const rechargeResponse = await client.post(
@@ -60,19 +75,14 @@ router.post('/create-order', async (req, res) => {
                     amount: amount,
                     payment_method: 'alipay'
                 }),
-                {
-                    headers: { 
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-                    }
-                }
+                { headers: COMMON_HEADERS }
             );
 
             // Parse the response to extract Alipay URL
             const $ = cheerio.load(rechargeResponse.data);
             let alipayUrl = '';
             
-            // Try to find Alipay URL in various possible elements
+            // Try to find Alipay URL in links
             $('a').each((i, elem) => {
                 const href = $(elem).attr('href');
                 if (href && href.includes('alipay.com')) {
@@ -81,18 +91,18 @@ router.post('/create-order', async (req, res) => {
                 }
             });
 
-            // If not found in links, try to find in form actions
+            // Try to find in form actions
             if (!alipayUrl) {
                 $('form').each((i, elem) => {
                     const action = $(elem).attr('action');
                     if (action && action.includes('alipay.com')) {
                         alipayUrl = action;
-                        return false; // Break loop
+                        return false; 
                     }
                 });
             }
 
-            // If still not found, try to find in JavaScript redirects or data attributes
+            // Try to find in JS snippets
             if (!alipayUrl) {
                 const scriptText = $('script').text();
                 const match = scriptText.match(/alipay\.com[^'"]*/);
