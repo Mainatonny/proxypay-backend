@@ -1,31 +1,148 @@
-const path = require('path');
-const QRCode = require('qrcode');
 const express = require('express');
-const app = express();
 const pool = require('../config/database');
-const { authenticateToken } = require('../middleware/auth');
-const { processPayment } = require('../controllers/paymentController');
 const axios = require('axios');
 const cheerio = require('cheerio');
 const tough = require('tough-cookie');
 const { wrapper } = require('axios-cookiejar-support');
 require('dotenv').config();
 
-const ALIPAY_BASE_URL = process.env.ALIPAY_BASE_URL || 'http://localhost:4000';
-const AWAKEN_USERNAME = process.env.AWAKEN_USERNAME || 'testuser';
-const AWAKEN_PASSWORD = process.env.AWAKEN_PASSWORD || 'testpass';
-
-
 const router = express.Router();
 
-router.use('/images', express.static(path.join(__dirname, 'images')));
+// Constants for the recharge website
+const RECHARGE_BASE_URL = 'https://m.1jianji.com';
+const RECHARGE_USERNAME = process.env.RECHARGE_USERNAME || '13231579635';
+const RECHARGE_PASSWORD = process.env.RECHARGE_PASSWORD || '579635';
 
-//const STATIC_ALIPAY_QR = "/images/alipay.jpg";
-
-router.get('/get-recharge-url/:orderId', authenticateToken, async (req, res) => {
-    const { orderId } = req.params;
-
+// Create payment order
+router.post('/create-order', async (req, res) => {
     try {
+        const { amount } = req.body;
+
+        if (!amount) {
+            return res.status(400).json({ error: 'Amount is required' });
+        }
+
+        // Create order in DB
+        const orderResult = await pool.query(
+            `INSERT INTO orders (amount, payment_method, status) 
+             VALUES ($1, 'alipay', 'pending') RETURNING *`,
+            [amount]
+        );
+        const order = orderResult.rows[0];
+
+        // Log in to recharge website and get Alipay URL
+        const jar = new tough.CookieJar();
+        const client = wrapper(axios.create({ 
+            jar,
+            withCredentials: true 
+        }));
+
+        try {
+            // Step 1: Login
+            const loginResponse = await client.post(
+                `${RECHARGE_BASE_URL}/login`,
+                new URLSearchParams({ 
+                    username: RECHARGE_USERNAME, 
+                    password: RECHARGE_PASSWORD 
+                }),
+                { 
+                    headers: { 
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                    } 
+                }
+            );
+
+            // Step 2: Perform recharge and get payment URL
+            const rechargeResponse = await client.post(
+                `${RECHARGE_BASE_URL}/recharge`,
+                new URLSearchParams({ 
+                    amount: amount,
+                    payment_method: 'alipay'
+                }),
+                {
+                    headers: { 
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                    }
+                }
+            );
+
+            // Parse the response to extract Alipay URL
+            const $ = cheerio.load(rechargeResponse.data);
+            let alipayUrl = '';
+            
+            // Try to find Alipay URL in various possible elements
+            $('a').each((i, elem) => {
+                const href = $(elem).attr('href');
+                if (href && href.includes('alipay.com')) {
+                    alipayUrl = href;
+                    return false; // Break loop
+                }
+            });
+
+            // If not found in links, try to find in form actions
+            if (!alipayUrl) {
+                $('form').each((i, elem) => {
+                    const action = $(elem).attr('action');
+                    if (action && action.includes('alipay.com')) {
+                        alipayUrl = action;
+                        return false; // Break loop
+                    }
+                });
+            }
+
+            // If still not found, try to find in JavaScript redirects or data attributes
+            if (!alipayUrl) {
+                const scriptText = $('script').text();
+                const match = scriptText.match(/alipay\.com[^'"]*/);
+                if (match) {
+                    alipayUrl = 'https://' + match[0];
+                }
+            }
+
+            if (!alipayUrl) {
+                throw new Error('Could not extract Alipay URL from recharge page');
+            }
+
+            // Update order with Alipay URL
+            await pool.query(
+                'UPDATE orders SET payment_url = $1 WHERE id = $2',
+                [alipayUrl, order.id]
+            );
+
+            res.status(201).json({
+                success: true,
+                order_id: order.id,
+                alipay_url: alipayUrl
+            });
+
+        } catch (error) {
+            console.error('Error during recharge process:', error);
+            
+            // Update order status to failed
+            await pool.query(
+                'UPDATE orders SET status = $1 WHERE id = $2',
+                ['failed', order.id]
+            );
+            
+            res.status(500).json({ 
+                error: 'Failed to generate payment URL',
+                details: error.message 
+            });
+        }
+
+    } catch (error) {
+        console.error('Error creating order:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Get order status
+router.get('/order-status/:orderId', async (req, res) => {
+    try {
+        const { orderId } = req.params;
+
         const orderResult = await pool.query(
             `SELECT * FROM orders WHERE id = $1`,
             [orderId]
@@ -35,308 +152,13 @@ router.get('/get-recharge-url/:orderId', authenticateToken, async (req, res) => 
             return res.status(404).json({ error: 'Order not found' });
         }
 
-        const order = orderResult.rows[0];
-
-        if (!String(order.payment_method).toLowerCase().includes('alipay')) {
-            return res.status(400).json({ error: 'Recharge URL only available for Alipay' });
-        }
-
-        const jar = new tough.CookieJar();
-        const client = wrapper(axios.create({ jar }));
-
-        // Simulate login
-        await client.post(
-            `${ALIPAY_BASE_URL}/login`,
-            new URLSearchParams({
-                username: AWAKEN_USERNAME,
-                password: AWAKEN_PASSWORD
-            }),
-            { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
-        );
-
-        // Fetch recharge page
-        const rechargePage = await client.get(
-            `${ALIPAY_BASE_URL}/recharge?amount=${order.amount}&order_id=${order.id}`
-        );
-
-        // Extract recharge URL
-        const $ = cheerio.load(rechargePage.data);
-        const rechargeURL = $('#recharge-link').attr('href');
-
         res.json({
-            order,
-            recharge_url: rechargeURL || STATIC_ALIPAY_QR
+            order: orderResult.rows[0]
         });
     } catch (error) {
-        console.error('Error getting recharge URL:', error);
+        console.error('Error fetching order status:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
-
-// Get payment methods
-router.get('/methods', authenticateToken, async (req, res) => {
-    try {
-        const result = await pool.query(
-            'SELECT * FROM payment_methods WHERE is_active = true ORDER BY name'
-        );
-        res.json(result.rows);
-    } catch (error) {
-        console.error('Error fetching payment methods:', error);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-});
-
-router.post('/create-order', authenticateToken, async (req, res) => {
-    try {
-        const { amount, payment_method, user_id } = req.body;
-
-        if (!amount || !payment_method) {
-            return res.status(400).json({ error: 'Amount and payment method are required' });
-        }
-
-        // 1️⃣ Create order in DB
-        const orderResult = await pool.query(
-            `INSERT INTO orders (user_id, amount, payment_method, status) 
-             VALUES ($1, $2, $3, 'pending') RETURNING *`,
-            [user_id, amount, payment_method]
-        );
-        const order = orderResult.rows[0];
-
-        // 2️⃣ Fetch payment method name
-        const methodResult = await pool.query(
-            'SELECT name FROM payment_methods WHERE id = $1',
-            [payment_method]
-        );
-        const methodName = methodResult.rows[0]?.name || '';
-
-        let paymentQR = '';
-
-        // 3️⃣ Only generate dynamic QR for Alipay
-        if (methodName.toLowerCase().includes('alipay')) {
-            try {
-                const jar = new tough.CookieJar();
-                const client = wrapper(axios.create({ jar }));
-
-                await client.post(
-                    `${ALIPAY_BASE_URL}/login`,
-                    new URLSearchParams({ username: AWAKEN_USERNAME, password: AWAKEN_PASSWORD }),
-                    { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
-                );
-
-                // Recharge page URL
-                paymentQR = `${ALIPAY_BASE_URL}/pay/${order.id}?amount=${amount}`;
-            } catch (err) {
-                console.error('Failed to fetch dynamic Alipay URL:', err.message);
-                return res.status(500).json({ error: 'Failed to generate Alipay recharge URL' });
-            }
-        }
-
-        res.status(201).json({
-            message: 'Order created successfully',
-            order,
-            payment_qr: paymentQR
-        });
-
-    } catch (error) {
-        console.error('Error creating order:', error);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-});
-
-// Simulate QR scan and “payment”
-router.post('/simulate', authenticateToken, async (req, res) => {
-    try {
-        const { order_id, user_id } = req.body;
-
-        // Validate order
-        const orderResult = await pool.query(
-            'SELECT * FROM orders WHERE id = $1 AND user_id = $2',
-            [order_id, user_id]
-        );
-        if (orderResult.rows.length === 0) {
-            return res.status(404).json({ error: 'Order not found' });
-        }
-
-        // Simulate payment by marking order as success
-        await pool.query(
-            'UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2',
-            ['success', order_id]
-        );
-
-        // Redirect back to frontend success page
-        res.json({
-            success: true,
-            message: 'Payment simulated successfully',
-            redirect_url: `/payment-success?order_id=${order_id}`
-        });
-    } catch (err) {
-        console.error('Simulation error:', err);
-        res.status(500).json({ success: false, error: 'Simulation failed' });
-    }
-});
-
-// Get order history
-router.get('/history/:user_id', authenticateToken, async (req, res) => {
-    try {
-        const { user_id } = req.params;
-        const { limit = 10, offset = 0 } = req.query;
-
-        const result = await pool.query(
-            `SELECT o.*, pm.name as payment_method_name 
-             FROM orders o 
-             LEFT JOIN payment_methods pm ON o.payment_method = pm.id 
-             WHERE o.user_id = $1 
-             ORDER BY o.created_at DESC 
-             LIMIT $2 OFFSET $3`,
-            [user_id, limit, offset]
-        );
-
-        const countResult = await pool.query(
-            'SELECT COUNT(*) FROM orders WHERE user_id = $1',
-            [user_id]
-        );
-
-        res.json({
-            orders: result.rows,
-            total: parseInt(countResult.rows[0].count)
-        });
-    } catch (error) {
-        console.error('Error fetching order history:', error);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-});
-
-// Get payment methods
-/**router.get('/methods', authenticateToken, async (req, res) => {
-  try {
-    const result = await pool.query(
-      'SELECT * FROM payment_methods WHERE is_active = true ORDER BY name'
-    );
-    res.json(result.rows);
-  } catch (error) {
-    console.error('Error fetching payment methods:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-const STATIC_ALIPAY_QR = "/images/alipay.jpg";
-
-// Create payment order
-router.post('/create-order', authenticateToken, async (req, res) => {
-  try {
-    const { amount, payment_method, user_id } = req.body;
-
-    if (!amount || !payment_method) {
-      return res.status(400).json({ error: 'Amount and payment method are required' });
-    }
-
-    // Create order in database
-    const orderResult = await pool.query(
-      `INSERT INTO orders (user_id, amount, payment_method, status) 
-       VALUES ($1, $2, $3, 'pending') 
-       RETURNING *`,
-      [user_id, amount, payment_method]
-    );
-
-    const order = orderResult.rows[0];
-
-    // Instead of generating a dynamic QR, just return your static AliPay QR
-    res.status(201).json({
-      message: 'Order created successfully',
-      order,
-      payment_qr: STATIC_ALIPAY_QR
-    });
-  } catch (error) {
-    console.error('Error creating order:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-module.exports = router;
-
-// Process payment
-router.post('/process', authenticateToken, async (req, res) => {
-  try {
-    const { order_id, payment_details } = req.body;
-
-    if (!order_id) {
-      return res.status(400).json({ error: 'Order ID is required' });
-    }
-
-    // Get order details
-    const orderResult = await pool.query(
-      'SELECT * FROM orders WHERE id = $1',
-      [order_id]
-    );
-
-    if (orderResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Order not found' });
-    }
-
-    const order = orderResult.rows[0];
-
-    // Process payment using the payment controller
-    const paymentResult = await processPayment(order, payment_details);
-
-    if (paymentResult.success) {
-      // Update order status to success
-      await pool.query(
-        'UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2',
-        ['success', order_id]
-      );
-
-      res.json({
-        message: 'Payment processed successfully',
-        transaction_id: paymentResult.transaction_id
-      });
-    } else {
-      // Update order status to failed
-      await pool.query(
-        'UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2',
-        ['failed', order_id]
-      );
-
-      res.status(400).json({
-        error: 'Payment processing failed',
-        details: paymentResult.error
-      });
-    }
-  } catch (error) {
-    console.error('Error processing payment:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// Get user order history
-router.get('/history/:user_id', authenticateToken, async (req, res) => {
-  try {
-    const { user_id } = req.params;
-    const { limit = 10, offset = 0 } = req.query;
-
-    const result = await pool.query(
-      `SELECT o.*, pm.name as payment_method_name 
-       FROM orders o 
-       LEFT JOIN payment_methods pm ON o.payment_method = pm.id 
-       WHERE o.user_id = $1 
-       ORDER BY o.created_at DESC 
-       LIMIT $2 OFFSET $3`,
-      [user_id, limit, offset]
-    );
-
-    const countResult = await pool.query(
-      'SELECT COUNT(*) FROM orders WHERE user_id = $1',
-      [user_id]
-    );
-
-    res.json({
-      orders: result.rows,
-      total: parseInt(countResult.rows[0].count)
-    });
-  } catch (error) {
-    console.error('Error fetching order history:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-**/
 
 module.exports = router;
