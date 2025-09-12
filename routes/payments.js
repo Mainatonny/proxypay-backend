@@ -28,7 +28,10 @@ router.post('/create-order', async (req, res) => {
         const order = orderResult.rows[0];
 
         try {
-            const browser = await puppeteer.launch({ headless: true });
+            const browser = await puppeteer.launch({
+              headless: true,
+              executablePath: '/usr/bin/chromium-browser' // or '/usr/bin/chromium'
+            });
             const page = await browser.newPage();
 
             await page.goto(RECHARGE_URL, { waitUntil: 'networkidle2' });
