@@ -67,7 +67,7 @@ app.use((req, res) => {
   res.status(404).json({ error: 'Endpoint not found' });
 });
 
-const PORT = 443;
+const PORT = 5000;
 const HOST = "0.0.0.0";
 
 app.listen(PORT, HOST, () => {
