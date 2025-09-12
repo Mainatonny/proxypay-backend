@@ -5,13 +5,21 @@ const RECHARGE_PASSWORD = process.env.RECHARGE_PASSWORD || '579635';
 
 (async () => {
   const browser = await puppeteer.launch({
-    executablePath: '/usr/bin/chromium-browser',
-    headless: true
-    });
+    executablePath: '/usr/bin/chromium-browser', // path to Chromium
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox'
+    ]
+  });
+
   const page = await browser.newPage();
 
   // Use domcontentloaded instead of waiting for full network idle
-  await page.goto('https://m.1jianji.com/#/pages/login/index', { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.goto('https://m.1jianji.com/#/pages/login/index', { 
+    waitUntil: 'domcontentloaded', 
+    timeout: 60000 
+  });
 
   // Wait for phone input
   await page.waitForSelector('input[placeholder="请输入手机号"]', { timeout: 60000 });
@@ -24,5 +32,6 @@ const RECHARGE_PASSWORD = process.env.RECHARGE_PASSWORD || '579635';
   // Wait for post-login element or just a fixed delay
   await page.waitForTimeout(5000);
 
-  console.log('Login attempted');
+  console.log('✅ Login attempted');
+  await browser.close();
 })();
