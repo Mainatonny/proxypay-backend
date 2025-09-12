@@ -48,15 +48,15 @@ router.post('/create-order', async (req, res) => {
             } catch (selErr) {
                 console.warn('⚠️ Placeholder selector failed, falling back to XPath');
 
-                // ✅ Fallback to XPath
-                const [phoneInput] = await page.$x('//input[@type="text"]');
+                // ✅ Fallback to XPath using waitForXPath
+                const phoneInput = await page.waitForXPath('//input[@type="text"]', { timeout: 10000 });
                 if (phoneInput) {
                     await phoneInput.type(RECHARGE_USERNAME, { delay: 100 });
                 } else {
                     throw new Error('Phone input not found');
                 }
 
-                const [passInput] = await page.$x('//input[@type="password"]');
+                const passInput = await page.waitForXPath('//input[@type="password"]', { timeout: 10000 });
                 if (passInput) {
                     await passInput.type(RECHARGE_PASSWORD, { delay: 100 });
                 } else {
@@ -64,8 +64,8 @@ router.post('/create-order', async (req, res) => {
                 }
             }
 
-            // ✅ Click login button
-            const [loginButton] = await page.$x('//button[contains(text(), "登录")]');
+            // ✅ Click login button with XPath safely
+            const loginButton = await page.waitForXPath('//button[contains(text(), "登录")]', { timeout: 10000 });
             if (!loginButton) throw new Error('Login button not found');
             await loginButton.click();
 
