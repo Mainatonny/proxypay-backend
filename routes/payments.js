@@ -28,49 +28,46 @@ router.post('/create-order', async (req, res) => {
         const order = orderResult.rows[0];
 
         try {
-            const browser = await puppeteer.launch({
-                headless: true,
-                args: ['--no-sandbox', '--disable-setuid-sandbox'],
-                executablePath: '/usr/bin/chromium-browser' // adjust if needed
-            });
-            const page = await browser.newPage();
+    const browser = await puppeteer.launch({
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        executablePath: '/usr/bin/chromium-browser' // adjust if needed
+    });
+    const page = await browser.newPage();
 
-            // ✅ Force mobile view
-            await page.setViewport({ width: 375, height: 812, isMobile: true });
+    // ✅ Force mobile view (important for uni-app/mobile sites)
+    await page.setViewport({ width: 375, height: 812, isMobile: true });
 
-            await page.goto(RECHARGE_URL, { waitUntil: 'networkidle2' });
+    await page.goto(RECHARGE_URL, { waitUntil: 'networkidle2' });
 
-            try {
-              await page.waitForSelector('input[placeholder="请输入手机号"]', { timeout: 10000 });
-              await page.type('input[placeholder="请输入手机号"]', RECHARGE_USERNAME, { delay: 100 });
-              await page.type('input[placeholder="请输入密码"]', RECHARGE_PASSWORD, { delay: 100 });
-          } catch (selErr) {
-              console.warn('⚠️ Placeholder selector failed, falling back to DOM query inside page.evaluate');
+    // --- Handle login inputs ---
+    try {
+        await page.waitForSelector('input[placeholder="请输入手机号"]', { timeout: 10000 });
+        await page.type('input[placeholder="请输入手机号"]', RECHARGE_USERNAME, { delay: 100 });
+        await page.type('input[placeholder="请输入密码"]', RECHARGE_PASSWORD, { delay: 100 });
+      } catch (selErr) {
+          console.warn('⚠️ Placeholder selector failed, falling back to DOM query inside page.evaluate');
 
-              // Fallback: query the DOM directly
-              await page.evaluate(({ user, pass }) => {
-                  const phoneInput = document.querySelector('input[type="text"]');
-                  const passInput = document.querySelector('input[type="password"]');
-                  if (phoneInput) phoneInput.value = user;
-                  if (passInput) passInput.value = pass;
-              }, { user: RECHARGE_USERNAME, pass: RECHARGE_PASSWORD });
-          }
+          // Fallback: query the DOM directly
+          await page.evaluate(({ user, pass }) => {
+              const phoneInput = document.querySelector('input[type="text"]');
+              const passInput = document.querySelector('input[type="password"]');
+              if (phoneInput) phoneInput.value = user;
+              if (passInput) passInput.value = pass;
+          }, { user: RECHARGE_USERNAME, pass: RECHARGE_PASSWORD });
+      }
 
-          // Click login button (also via evaluate for safety)
-          const loginClicked = await page.evaluate(() => {
-              const btn = Array.from(document.querySelectorAll('button'))
-                  .find(b => b.textContent.includes('登录'));
-              if (btn) {
-                  btn.click();
-                  return true;
-              }
-              return false;
-          });
+      // --- Handle login button (uni-view.button instead of <button>) ---
+      try {
+          await page.waitForSelector('uni-view.button', { timeout: 10000 });
+          await page.click('uni-view.button');
+          console.log("✅ Login button clicked (uni-view.button)");
+      } catch (btnErr) {
+          throw new Error('Login button not found (uni-view.button)');
+      }
 
-          if (!loginClicked) throw new Error('Login button not found');
-
-            // Wait for navigation after login
-            await page.waitForTimeout(5000);
+      // Wait for navigation after login
+      await page.waitForTimeout(5000);
 
             // Go to recharge page
             await page.goto(`https://m.1jianji.com/#/pages/recharge/index?amount=${amount}`, { waitUntil: 'networkidle2' });
