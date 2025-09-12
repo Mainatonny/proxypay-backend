@@ -29,45 +29,79 @@ router.post('/create-order', async (req, res) => {
 
         try {
             const browser = await puppeteer.launch({
-              headless: true,
-              args: ['--no-sandbox', '--disable-setuid-sandbox'],
-              executablePath: '/usr/bin/chromium-browser' // or '/usr/bin/chromium'
+                headless: true,
+                args: ['--no-sandbox', '--disable-setuid-sandbox'],
+                executablePath: '/usr/bin/chromium-browser' // adjust if needed
             });
             const page = await browser.newPage();
 
+            // ✅ Force mobile view
+            await page.setViewport({ width: 375, height: 812, isMobile: true });
+
             await page.goto(RECHARGE_URL, { waitUntil: 'networkidle2' });
 
-            // Wait for login form
-            await page.waitForSelector('input[placeholder="请输入手机号"]', { timeout: 10000 });
-            await page.type('input[placeholder="请输入手机号"]', RECHARGE_USERNAME, { delay: 100 });
-            await page.type('input[placeholder="请输入密码"]', RECHARGE_PASSWORD, { delay: 100 });
+            try {
+                // ✅ Try with placeholder first
+                await page.waitForSelector('input[placeholder="请输入手机号"]', { timeout: 10000 });
+                await page.type('input[placeholder="请输入手机号"]', RECHARGE_USERNAME, { delay: 100 });
+                await page.type('input[placeholder="请输入密码"]', RECHARGE_PASSWORD, { delay: 100 });
+            } catch (selErr) {
+                console.warn('⚠️ Placeholder selector failed, falling back to XPath');
 
-            // Click login button
+                // ✅ Fallback to XPath
+                const [phoneInput] = await page.$x('//input[@type="text"]');
+                if (phoneInput) {
+                    await phoneInput.type(RECHARGE_USERNAME, { delay: 100 });
+                } else {
+                    throw new Error('Phone input not found');
+                }
+
+                const [passInput] = await page.$x('//input[@type="password"]');
+                if (passInput) {
+                    await passInput.type(RECHARGE_PASSWORD, { delay: 100 });
+                } else {
+                    throw new Error('Password input not found');
+                }
+            }
+
+            // ✅ Click login button
             const [loginButton] = await page.$x('//button[contains(text(), "登录")]');
             if (!loginButton) throw new Error('Login button not found');
             await loginButton.click();
 
-            // Wait for navigation after login (adjust if needed)
+            // Wait for navigation after login
             await page.waitForTimeout(5000);
 
-            // Navigate to recharge page
-            // NOTE: You might need to adjust the selector for the recharge button/input
+            // Go to recharge page
             await page.goto(`https://m.1jianji.com/#/pages/recharge/index?amount=${amount}`, { waitUntil: 'networkidle2' });
 
-            // Click "Alipay" payment option (adjust selector)
+            // ✅ Try to click Alipay button
             const [alipayBtn] = await page.$x('//button[contains(text(), "Alipay")] | //button[contains(text(), "支付宝")]');
-            if (alipayBtn) await alipayBtn.click();
+            if (alipayBtn) {
+                await alipayBtn.click();
+            } else {
+                console.warn('⚠️ Alipay button not found, continuing anyway');
+            }
 
-            // Wait for Alipay URL to appear
-            await page.waitForTimeout(3000); // wait for the redirect/link
+            // Wait a bit for redirect
+            await page.waitForTimeout(3000);
+
+            // ✅ Extract URL
             const alipayUrl = await page.evaluate(() => {
                 const link = document.querySelector('a')?.href;
                 return link || '';
             });
 
-            if (!alipayUrl) throw new Error('Failed to extract Alipay URL');
+            if (!alipayUrl) {
+                // Debug HTML + screenshot if it fails
+                console.error('❌ Failed to extract Alipay URL, dumping debug info');
+                const html = await page.content();
+                console.error(html.substring(0, 1000)); // print first 1k chars
+                await page.screenshot({ path: 'debug.png', fullPage: true });
+                throw new Error('Failed to extract Alipay URL');
+            }
 
-            // Update order with Alipay URL
+            // Update DB with payment URL
             await pool.query('UPDATE orders SET payment_url = $1 WHERE id = $2', [alipayUrl, order.id]);
 
             await browser.close();
