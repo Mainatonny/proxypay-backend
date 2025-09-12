@@ -4,7 +4,10 @@ const RECHARGE_USERNAME = process.env.RECHARGE_USERNAME || '13231579635';
 const RECHARGE_PASSWORD = process.env.RECHARGE_PASSWORD || '579635';
 
 (async () => {
-  const browser = await puppeteer.launch({ headless: false });
+  const browser = await puppeteer.launch({
+    executablePath: '/usr/bin/chromium-browser',
+    headless: true
+    });
   const page = await browser.newPage();
 
   // Use domcontentloaded instead of waiting for full network idle
