@@ -1,45 +1,25 @@
-// test-proxies.js
-const axios = require("axios");
-const { HttpsProxyAgent } = require("https-proxy-agent");
-const { SocksProxyAgent } = require("socks-proxy-agent");
+import puppeteer from 'puppeteer';
 
-// List of proxies to test
-const proxies = [
-  { url: "socks5://60.161.5.84:333", note: "Kunming SOCKS5" },
-  { url: "http://8.130.71.75:8080", note: "Proxy5" },
-  { url: "http://27.189.129.161:8089", note: "Proxy5" },
-  { url: "http://47.116.210.163:9098", note: "Shanghai HTTP" },
-  { url: "http://47.116.210.163:8080", note: "Shanghai HTTP" },
-  { url: "http://39.102.213.213:8089", note: "Proxy5" },
-];
-
-async function testProxy(proxy) {
-  try {
-    let agent;
-    if (proxy.url.startsWith("socks")) {
-      agent = new SocksProxyAgent(proxy.url);
-    } else {
-      agent = new HttpsProxyAgent(proxy.url);
-    }
-
-    const res = await axios.get("https://m.1jianji.com/login", {
-      httpsAgent: agent,
-      timeout: 15000,
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:142.0) Gecko/20100101 Firefox/142.0",
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      },
-    });
-
-    console.log(`✅ ${proxy.note} (${proxy.url}) -> ${res.status}`);
-  } catch (err) {
-    console.log(`❌ ${proxy.note} (${proxy.url}) -> ${err.message}`);
-  }
-}
+const RECHARGE_USERNAME = process.env.RECHARGE_USERNAME || '13231579635';
+const RECHARGE_PASSWORD = process.env.RECHARGE_PASSWORD || '579635';
 
 (async () => {
-  for (let proxy of proxies) {
-    await testProxy(proxy);
-  }
+  const browser = await puppeteer.launch({ headless: false });
+  const page = await browser.newPage();
+
+  // Use domcontentloaded instead of waiting for full network idle
+  await page.goto('https://m.1jianji.com/#/pages/login/index', { waitUntil: 'domcontentloaded', timeout: 60000 });
+
+  // Wait for phone input
+  await page.waitForSelector('input[placeholder="请输入手机号"]', { timeout: 60000 });
+  await page.type('input[placeholder="请输入手机号"]', RECHARGE_USERNAME, { delay: 100 });
+  await page.type('input[placeholder="请输入密码"]', RECHARGE_PASSWORD, { delay: 100 });
+
+  const [loginButton] = await page.$x('//button[contains(text(), "登录")]');
+  if (loginButton) await loginButton.click();
+
+  // Wait for post-login element or just a fixed delay
+  await page.waitForTimeout(5000);
+
+  console.log('Login attempted');
 })();
