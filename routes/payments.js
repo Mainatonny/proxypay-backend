@@ -41,33 +41,33 @@ router.post('/create-order', async (req, res) => {
             await page.goto(RECHARGE_URL, { waitUntil: 'networkidle2' });
 
             try {
-                // ✅ Try with placeholder first
-                await page.waitForSelector('input[placeholder="请输入手机号"]', { timeout: 10000 });
-                await page.type('input[placeholder="请输入手机号"]', RECHARGE_USERNAME, { delay: 100 });
-                await page.type('input[placeholder="请输入密码"]', RECHARGE_PASSWORD, { delay: 100 });
-            } catch (selErr) {
-                console.warn('⚠️ Placeholder selector failed, falling back to XPath');
+              await page.waitForSelector('input[placeholder="请输入手机号"]', { timeout: 10000 });
+              await page.type('input[placeholder="请输入手机号"]', RECHARGE_USERNAME, { delay: 100 });
+              await page.type('input[placeholder="请输入密码"]', RECHARGE_PASSWORD, { delay: 100 });
+          } catch (selErr) {
+              console.warn('⚠️ Placeholder selector failed, falling back to DOM query inside page.evaluate');
 
-                // ✅ Fallback to XPath using waitForXPath
-                const phoneInput = await page.waitForXPath('//input[@type="text"]', { timeout: 10000 });
-                if (phoneInput) {
-                    await phoneInput.type(RECHARGE_USERNAME, { delay: 100 });
-                } else {
-                    throw new Error('Phone input not found');
-                }
+              // Fallback: query the DOM directly
+              await page.evaluate(({ user, pass }) => {
+                  const phoneInput = document.querySelector('input[type="text"]');
+                  const passInput = document.querySelector('input[type="password"]');
+                  if (phoneInput) phoneInput.value = user;
+                  if (passInput) passInput.value = pass;
+              }, { user: RECHARGE_USERNAME, pass: RECHARGE_PASSWORD });
+          }
 
-                const passInput = await page.waitForXPath('//input[@type="password"]', { timeout: 10000 });
-                if (passInput) {
-                    await passInput.type(RECHARGE_PASSWORD, { delay: 100 });
-                } else {
-                    throw new Error('Password input not found');
-                }
-            }
+          // Click login button (also via evaluate for safety)
+          const loginClicked = await page.evaluate(() => {
+              const btn = Array.from(document.querySelectorAll('button'))
+                  .find(b => b.textContent.includes('登录'));
+              if (btn) {
+                  btn.click();
+                  return true;
+              }
+              return false;
+          });
 
-            // ✅ Click login button with XPath safely
-            const loginButton = await page.waitForXPath('//button[contains(text(), "登录")]', { timeout: 10000 });
-            if (!loginButton) throw new Error('Login button not found');
-            await loginButton.click();
+          if (!loginClicked) throw new Error('Login button not found');
 
             // Wait for navigation after login
             await page.waitForTimeout(5000);
