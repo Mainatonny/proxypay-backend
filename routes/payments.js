@@ -35,7 +35,7 @@ router.post('/create-order', async (req, res) => {
             });
             const page = await browser.newPage();
 
-            // ✅ Force mobile view
+            //  Force mobile view
             await page.setViewport({ width: 375, height: 812, isMobile: true });
 
             await page.goto(RECHARGE_URL, { waitUntil: 'networkidle2' });
@@ -46,7 +46,7 @@ router.post('/create-order', async (req, res) => {
                 await page.type('input[placeholder="请输入手机号"]', RECHARGE_USERNAME, { delay: 100 });
                 await page.type('input[placeholder="请输入密码"]', RECHARGE_PASSWORD, { delay: 100 });
             } catch (selErr) {
-                console.warn('⚠️ Placeholder selector failed, falling back to DOM query inside page.evaluate');
+                console.warn(' Placeholder selector failed, falling back to DOM query inside page.evaluate');
 
                 await page.evaluate(({ user, pass }) => {
                     const phoneInput = document.querySelector('input[type="text"]');
@@ -60,7 +60,7 @@ router.post('/create-order', async (req, res) => {
             try {
                 await page.waitForSelector('uni-view.button', { timeout: 10000 });
                 await page.click('uni-view.button');
-                console.log("✅ Login button clicked (uni-view.button)");
+                console.log(" Login button clicked (uni-view.button)");
             } catch (btnErr) {
                 throw new Error('Login button not found (uni-view.button)');
             }
@@ -71,7 +71,7 @@ router.post('/create-order', async (req, res) => {
             // Go to recharge page
             await page.goto(`https://m.1jianji.com/#/pages/recharge/index?amount=${amount}`, { waitUntil: 'networkidle2' });
 
-            // ✅ Click Alipay button (DOM query instead of $x)
+            //  Click Alipay button (DOM query instead of $x)
             const alipayClicked = await page.evaluate(() => {
                 const btn = Array.from(document.querySelectorAll('button'))
                     .find(b => b.textContent.includes('Alipay') || b.textContent.includes('支付宝'));
@@ -83,22 +83,22 @@ router.post('/create-order', async (req, res) => {
             });
 
             if (alipayClicked) {
-                console.log("✅ Alipay button clicked");
+                console.log(" Alipay button clicked");
             } else {
-                console.warn("⚠️ Alipay button not found, continuing anyway");
+                console.warn(" Alipay button not found, continuing anyway");
             }
 
             // Wait a bit for redirect
             await new Promise(r => setTimeout(r, 3000));
 
-            // ✅ Extract URL
+            // Extract URL
             const alipayUrl = await page.evaluate(() => {
                 const link = document.querySelector('a')?.href;
                 return link || '';
             });
 
             if (!alipayUrl) {
-                console.error('❌ Failed to extract Alipay URL, dumping debug info');
+                console.error(' Failed to extract Alipay URL, dumping debug info');
                 const html = await page.content();
                 console.error(html.substring(0, 1000));
                 await page.screenshot({ path: 'debug.png', fullPage: true });
